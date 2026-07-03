@@ -89,6 +89,9 @@ pub struct MatrixRunConfig {
     pub body_logging_enabled: bool,
     pub on_attempt_log: Option<Arc<dyn Fn(AttemptLog) + Send + Sync>>,
     pub cancellation: Option<RunCancellation>,
+    /// Issue #23: milliseconds to sleep between successive request fires.
+    /// `0` means no delay (fire as fast as possible).
+    pub delay_ms: u32,
 }
 
 /// Progress notification emitted after each attempt completes.
@@ -619,6 +622,17 @@ where
                     let mut local_cache = crate::template::BindCache::new();
                     let cache: &mut crate::template::BindCache =
                         shared_cache.as_mut().unwrap_or(&mut local_cache);
+
+                    // Issue #23: pace successive requests. The first fire is
+                    // immediate; each later fire waits delay_ms. A cancel during
+                    // the pause is caught by the select below, so no extra
+                    // request fires.
+                    if config.delay_ms > 0 && seq > 0 {
+                        tokio::time::sleep(std::time::Duration::from_millis(u64::from(
+                            config.delay_ms,
+                        )))
+                        .await;
+                    }
 
                     let send_time = Instant::now();
                     let chain_result = if let Some(cancel) = &cancellation {

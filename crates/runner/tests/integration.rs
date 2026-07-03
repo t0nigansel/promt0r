@@ -294,6 +294,7 @@ async fn matrix_run_fires_n_times_m_with_shared_session_prerequisite() {
         body_logging_enabled: false,
         on_attempt_log: None,
         cancellation: None,
+        delay_ms: 0,
     };
 
     runner::execute_matrix_run(config, |_| {})
@@ -457,6 +458,7 @@ async fn matrix_run_with_shared_session_false_fires_prereq_per_cell() {
         body_logging_enabled: false,
         on_attempt_log: None,
         cancellation: None,
+        delay_ms: 0,
     };
     runner::execute_matrix_run(config, |_| {}).await.unwrap();
 
@@ -1086,6 +1088,7 @@ async fn per_request_repeat_multiplies_attempt_count() {
         body_logging_enabled: false,
         on_attempt_log: None,
         cancellation: None,
+        delay_ms: 0,
     };
 
     runner::execute_matrix_run(config, |_| {}).await.unwrap();
@@ -1210,6 +1213,7 @@ async fn matrix_run_with_mutations_records_mutation_id_per_attempt() {
         body_logging_enabled: false,
         on_attempt_log: None,
         cancellation: None,
+        delay_ms: 0,
     };
     runner::execute_matrix_run(config, |_| {}).await.unwrap();
 
@@ -1322,6 +1326,7 @@ async fn multi_session_plant_probe_leak_is_detected_and_recorded() {
         body_logging_enabled: false,
         on_attempt_log: None,
         cancellation: None,
+        delay_ms: 0,
     };
     execute_multi_session_run(config, |_| {}).await.unwrap();
 
@@ -1434,6 +1439,7 @@ async fn multi_session_no_leak_when_server_does_not_echo_canary() {
         body_logging_enabled: false,
         on_attempt_log: None,
         cancellation: None,
+        delay_ms: 0,
     };
     execute_multi_session_run(config, |_| {}).await.unwrap();
 
@@ -1443,4 +1449,70 @@ async fn multi_session_no_leak_when_server_does_not_echo_canary() {
         .filter(|r| matches!(r, RunRecord::LeakDetected(_)))
         .count();
     assert_eq!(leaks, 0, "clean baseline should produce zero leak records");
+}
+
+// Issue #23: a scenario-level delay paces successive requests.
+#[tokio::test]
+async fn matrix_run_delay_ms_paces_requests() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("ok"))
+        .mount(&server)
+        .await;
+
+    let request = make_request(
+        &format!("{}/chat", server.uri()),
+        AdapterType::CustomRest,
+        ExtractConfig::Raw,
+    );
+    let mut registry: HashMap<String, Request> = HashMap::new();
+    registry.insert("test-request".into(), request);
+
+    // Three payloads => three fires. The first fire is immediate; the next
+    // two each wait delay_ms, so the run must take at least ~2 * delay_ms.
+    let payloads: Vec<Payload> = (1..=3)
+        .map(|i| Payload {
+            prompt_id: "cat".into(),
+            payload_id: format!("p{i}"),
+            text: format!("attack {i}"),
+            session: "default".into(),
+            mutation_id: None,
+        })
+        .collect();
+
+    let tmp = TempDir::new().unwrap();
+    std::fs::create_dir_all(tmp.path().join("runs")).unwrap();
+    std::fs::create_dir_all(tmp.path().join("responses")).unwrap();
+
+    let config = runner::MatrixRunConfig {
+        engagement_dir: tmp.path().to_owned(),
+        run_id: "run-delay".into(),
+        scenario_id: "delay-scn".into(),
+        registry,
+        request_ids: vec!["test-request".into()],
+        per_request_repeat: HashMap::new(),
+        payloads,
+        repeat: 1,
+        shared_session: false,
+        session_strategy: SessionStrategy::None,
+        runner_version: "test".into(),
+        body_logging_enabled: false,
+        on_attempt_log: None,
+        cancellation: None,
+        delay_ms: 120,
+    };
+
+    let started = std::time::Instant::now();
+    runner::execute_matrix_run(config, |_| {})
+        .await
+        .expect("delayed matrix run should succeed");
+    let elapsed = started.elapsed();
+
+    // Two 120ms gaps between three fires => >= 240ms. Assert a generous lower
+    // bound (200ms) to prove the delay is applied without being flaky — a
+    // no-delay run finishes in single-digit milliseconds.
+    assert!(
+        elapsed >= Duration::from_millis(200),
+        "expected >= ~240ms from inter-request delay, got {elapsed:?}"
+    );
 }

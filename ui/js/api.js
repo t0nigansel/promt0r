@@ -135,6 +135,7 @@ const API = (() => {
       request_ids,
       request_repeats,
       repeat_count: s.repeat || 1,
+      delay_ms: s.delay_ms || 0,
     };
   }
 
@@ -316,6 +317,7 @@ const API = (() => {
         ...current,
         name: data.name || current.name || 'Untitled',
         repeat: Math.max(1, Number(data.repeat_count || current.repeat || 1)),
+        delay_ms: Math.max(0, Number(data.delay_ms ?? current.delay_ms ?? 0)),
       };
       if (Array.isArray(data.request_ids)) {
         const repeats = (data.request_repeats && typeof data.request_repeats === 'object')

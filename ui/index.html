@@ -25,6 +25,9 @@
       <span class="sep" id="breadcrumb-sep-run" hidden>/</span>
       <span class="current" id="breadcrumb-run" hidden></span>
     </div>
+    <button id="topbar-eng-chip" class="topbar-eng-chip" type="button" data-state="none" title="Open or create an engagement">
+      <span id="topbar-eng-chip-label">No engagement open</span>
+    </button>
     <div class="topbar-progress" id="topbar-progress" aria-live="polite">
       <button id="topbar-progress-toggle" class="topbar-progress-toggle" type="button"
               title="Show run details" aria-expanded="false" aria-controls="topbar-progress-detail">
@@ -46,6 +49,7 @@
       <dt>Current request</dt><dd id="tpd-request">—</dd>
       <dt>Current prompt</dt> <dd id="tpd-prompt">—</dd>
     </dl>
+    <button id="btn-tpd-goto" type="button" class="btn btn-ghost" style="margin-top:8px;padding:4px 10px;font-size:11px;">→ Go to run</button>
   </div>
 
   <!-- ================================================================
@@ -85,7 +89,6 @@
       </svg>
       <span class="label">Scenarios</span>
     </button>
-    <div class="nav-spacer"></div>
     <button class="nav-item sidebar-item" data-view="view-prompts" title="Library">
       <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="m16 6 4 14" />
@@ -95,6 +98,7 @@
       </svg>
       <span class="label">Library</span>
     </button>
+    <div class="nav-spacer"></div>
     <button class="nav-item sidebar-item" data-nav="settings" title="Settings">
       <svg class="nav-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915" />
@@ -115,13 +119,13 @@
     <section id="view-home" class="view">
       <div class="landing-wrap">
         <div class="flow-strip">
-          <span class="flow-step">1 · Engagement</span>
+          <button type="button" class="flow-step" data-view="view-requests">Request</button>
           <span class="flow-arrow">→</span>
-          <span class="flow-step">2 · Requests</span>
+          <button type="button" class="flow-step" data-view="view-scenarios">Scenario</button>
+          <span class="flow-arrow">+</span>
+          <button type="button" class="flow-step" data-view="view-prompts">Library</button>
           <span class="flow-arrow">→</span>
-          <span class="flow-step">3 · Scenarios</span>
-          <span class="flow-arrow">→</span>
-          <span class="flow-step">4 · Run</span>
+          <button type="button" class="flow-step" data-view="view-engagements">Run in an Engagement</button>
         </div>
         <div class="landing-cta-grid" id="home-cta-grid">
           <!-- Populated by updateHomeCtas() — tiles adapt to whether the
@@ -179,7 +183,8 @@
               get substituted at run time.
             </p>
             <p class="muted" style="margin:0.5rem 0 1.5rem;font-size:12px;">
-              Make sure an Engagement is open first — use the <strong>+</strong> button in the toolbar.
+              Requests are global — create one here, fire it standalone to debug,
+              then use it in a Scenario. No engagement needed to build one.
             </p>
             <button id="btn-request-get-started" class="btn btn-primary">+ Create request</button>
           </div>
@@ -190,12 +195,8 @@
               <input type="text" id="req-name" placeholder="e.g. OpenAI Chat Completion" required>
             </div>
             <div class="form-row">
-              <label for="req-id">Id <span class="hint">(filename stem, kebab-case)</span></label>
-              <input type="text" id="req-id" placeholder="e.g. openai-chat-completion" required pattern="[a-z0-9][a-z0-9-]*">
-            </div>
-            <div class="form-row">
-              <label for="req-tag">Tag <span class="hint">(optional, free-text grouping label)</span></label>
-              <input type="text" id="req-tag" placeholder="e.g. acme-staging">
+              <label for="req-id">Id <span class="hint">(optional — auto-derived from the name)</span></label>
+              <input type="text" id="req-id" placeholder="auto-derived from name" pattern="[a-z0-9][a-z0-9-]*">
             </div>
             <div class="form-row form-row-inline">
               <div style="flex:0 0 110px">
@@ -280,30 +281,39 @@
                 style="margin-top:6px;display:none;">
             </div>
 
-            <div class="form-row">
-              <label for="req-bind">
-                Bind extracted value as
-                <span class="hint">(optional — names the response value for auth chains)</span>
-              </label>
-              <input type="text" id="req-bind" placeholder="e.g. bearer_token" pattern="[a-zA-Z][a-zA-Z0-9_-]*">
-              <div class="hint">
-                When set, other Requests can reference this value via
-                <code>&#123;&#123;<em>request_id</em>.<em>bind</em>&#125;&#125;</code> in URL,
-                headers, or body. Example: a login Request binds <code>bearer_token</code>;
-                a chat Request puts <code>Authorization: Bearer &#123;&#123;login.bearer_token&#125;&#125;</code>
-                in its headers. The runner fires the login Request first, captures the value, and
-                injects it into the chat Request.
-              </div>
-            </div>
+            <details id="req-advanced" class="advanced-disclosure">
+              <summary>Advanced — tag, auth chaining, result columns</summary>
 
-            <div class="form-row">
-              <label for="req-result-columns">Result columns</label>
-              <textarea id="req-result-columns" rows="4" spellcheck="false"
-                placeholder="QA: qualifications&#10;EX: experience&#10;Total: total"></textarea>
-              <div class="hint">
-                Optional. One column per line as <code>Label: dot.path</code>. Values are read from JSON responses and shown in Engagement results.
+              <div class="form-row">
+                <label for="req-tag">Tag <span class="hint">(optional, free-text grouping label)</span></label>
+                <input type="text" id="req-tag" placeholder="e.g. acme-staging">
               </div>
-            </div>
+
+              <div class="form-row">
+                <label for="req-bind">
+                  Bind extracted value as
+                  <span class="hint">(optional — names the response value for auth chains)</span>
+                </label>
+                <input type="text" id="req-bind" placeholder="e.g. bearer_token" pattern="[a-zA-Z][a-zA-Z0-9_-]*">
+                <div class="hint">
+                  When set, other Requests can reference this value via
+                  <code>&#123;&#123;<em>request_id</em>.<em>bind</em>&#125;&#125;</code> in URL,
+                  headers, or body. Example: a login Request binds <code>bearer_token</code>;
+                  a chat Request puts <code>Authorization: Bearer &#123;&#123;login.bearer_token&#125;&#125;</code>
+                  in its headers. The runner fires the login Request first, captures the value, and
+                  injects it into the chat Request.
+                </div>
+              </div>
+
+              <div class="form-row">
+                <label for="req-result-columns">Result columns</label>
+                <textarea id="req-result-columns" rows="4" spellcheck="false"
+                  placeholder="QA: qualifications&#10;EX: experience&#10;Total: total"></textarea>
+                <div class="hint">
+                  Optional. One column per line as <code>Label: dot.path</code>. Values are read from JSON responses and shown in Engagement results.
+                </div>
+              </div>
+            </details>
 
             <div class="form-row form-row-inline">
               <div style="flex:0 0 160px">
@@ -322,6 +332,7 @@
               <button type="submit" id="btn-req-save" class="btn btn-primary">Save</button>
               <button type="button" id="btn-req-fire" class="btn btn-ghost" title="Fire this request with the Test payload" aria-label="Fire request">&#9654; Fire</button>
               <button type="button" id="btn-req-cancel" class="btn btn-ghost">Cancel</button>
+              <button type="button" id="btn-req-import-curl" class="btn btn-ghost" title="Fill this form from a pasted curl command">Import curl</button>
               <span style="flex:1"></span>
               <button type="button" id="btn-req-delete" class="btn btn-ghost danger" style="display:none;">Delete</button>
             </div>
@@ -458,7 +469,7 @@
             </div>
             <span class="lib-count" id="prompt-count">—</span>
             <button class="btn btn-ghost" id="btn-seed-library" style="padding:4px 10px;font-size:11px;">Seed</button>
-            <button class="btn btn-ghost" id="btn-import-csv" style="padding:4px 10px;font-size:11px;">Import CSV</button>
+            <button class="btn btn-ghost" id="btn-import-csv" style="padding:4px 10px;font-size:11px;" disabled title="CSV import is coming in a future release">Import CSV</button>
             <button class="btn btn-primary" id="btn-add-prompt" style="padding:4px 10px;font-size:11px;">+ Add</button>
             <input type="file" id="csv-file-input" accept=".csv" style="display:none">
           </div>
@@ -469,7 +480,7 @@
           <div class="lib-list">
             <div class="prompt-list" id="library-prompt-list">
               <div style="padding:20px 14px;font-family:var(--mono);font-size:11px;color:var(--text-3);text-align:center;">
-                open an engagement to load prompts
+                loading prompts…
               </div>
             </div>
           </div>
@@ -590,10 +601,11 @@
                   <label for="sc-repeat">Repeat</label>
                   <input id="sc-repeat" type="number" min="1" value="1">
                 </div>
-              </div>
-              <div class="form-row">
-                <label for="sc-tester">Tester name</label>
-                <input id="sc-tester" type="text" placeholder="Your name" value="default">
+                <div class="form-row">
+                  <label for="sc-delay">Delay between requests (ms)</label>
+                  <input id="sc-delay" type="number" min="0" step="50" value="0"
+                         title="Pause between successive requests during a run (0 = no delay)">
+                </div>
               </div>
               <div class="editor-actions">
                 <button id="btn-save-scenario" type="button" class="btn btn-primary">Save Scenario</button>
@@ -638,8 +650,8 @@
               </label>
             </div>
 
-            <div class="form-row">
-              <label>Mutations</label>
+            <details id="sc-mutations-adv" class="advanced-disclosure">
+              <summary>Mutations <span class="hint">(expand seeds into encoded / obfuscated variants)</span></summary>
               <div id="sc-matrix-mutations" class="mutation-panel"></div>
               <div class="form-row" style="margin-top:8px;">
                 <label for="sc-matrix-mutations-cap" class="hint" style="font-weight:normal;">
@@ -651,10 +663,10 @@
               <div class="hint" id="sc-matrix-mutations-counter">
                 Mutations disabled. Each seed prompt fires once.
               </div>
-            </div>
+            </details>
 
-            <div class="form-row">
-              <label for="sc-matrix-session-count">Multi-session</label>
+            <details id="sc-multisession-adv" class="advanced-disclosure">
+              <summary>Multi-session <span class="hint">(parallel sessions + cross-session leak scan)</span></summary>
               <div style="display:flex;gap:10px;align-items:center;">
                 <input type="number" id="sc-matrix-session-count" min="1" step="1"
                   value="1" style="width:80px;"
@@ -675,7 +687,7 @@
                 across parallel sessions and scan for cross-session
                 canary leaks (OWASP LLM02).
               </div>
-            </div>
+            </details>
 
             <div id="scenario-results" style="display:none">
               <h3>Results</h3>
@@ -712,10 +724,11 @@
             <p class="muted" style="margin:1rem 0;">
               An engagement is a folder on disk that holds your runs,
               responses, and (if installed) verdicts. It's your workspace —
-              open or create one before building Requests or Scenarios.
+              you only need one to <strong>run</strong> a scenario. Requests
+              and scenarios can be built any time from their own views.
             </p>
             <p class="muted" style="margin:0.5rem 0 1.5rem;font-size:12px;">
-              Use the <strong>+</strong> button in the toolbar, or create one below.
+              Use the <strong>+</strong> above the engagement list, or create one below.
               Runs are stored here automatically when you fire a Scenario.
             </p>
             <button id="btn-engagement-get-started" class="btn btn-primary">+ Create engagement</button>
@@ -794,6 +807,24 @@
                     <button class="triage-filter-chip" data-triage-filter="needs_review">Needs Review</button>
                     <button class="triage-filter-chip" data-triage-filter="unreviewed">Unreviewed</button>
                     <button class="triage-filter-chip" data-triage-filter="false_positive">False Positive</button>
+                    <span style="flex:1"></span>
+                    <select id="bulk-triage-status" class="triage-bulk-select" title="Bulk-set triage status for the rows currently shown">
+                      <option value="">Bulk set…</option>
+                      <option value="confirmed">Confirmed</option>
+                      <option value="needs_review">Needs Review</option>
+                      <option value="false_positive">False Positive</option>
+                      <option value="unreviewed">Unreviewed</option>
+                    </select>
+                    <button id="btn-bulk-triage-apply" class="triage-filter-chip" type="button">Apply to shown</button>
+                  </div>
+                  <div id="verdict-filter-bar" class="triage-filter-bar">
+                    <span class="triage-filter-label">Verdict:</span>
+                    <button class="verdict-filter-chip active" data-verdict-filter="all">All</button>
+                    <button class="verdict-filter-chip" data-verdict-filter="success">Success</button>
+                    <button class="verdict-filter-chip" data-verdict-filter="fail">Fail</button>
+                    <button class="verdict-filter-chip" data-verdict-filter="partial">Partial</button>
+                    <button class="verdict-filter-chip" data-verdict-filter="unclear">Unclear</button>
+                    <button class="verdict-filter-chip" data-verdict-filter="none">Unscored</button>
                   </div>
                   <div class="table-wrap">
                     <table id="results-table">
@@ -864,6 +895,7 @@
           <span id="replay-status" class="replay-status">—</span>
         </div>
         <div id="replay-result" class="replay-result" hidden></div>
+        <div id="replay-history" class="replay-history"></div>
       </div>
     </div>
     <div class="detail-section" id="detail-metrics-section" style="display:none">
@@ -979,7 +1011,7 @@
     <p class="muted" style="font-size:12px;margin:0 0 1rem 0;">
       We create one Scenario and one Engagement for you, then fire. Use the
       built-in OpenAI-compatible template, or point Quick Start at a Request
-      you've already configured in the Library.
+      you've already saved in the Requests view.
     </p>
     <form id="quickstart-form" autocomplete="off">
       <div class="form-row">
@@ -1073,7 +1105,7 @@
     <h3 class="modal-heading">Store bearer token</h3>
     <p class="muted" style="font-size:12px;margin:0 0 1rem 0;">
       Stored in the OS credential vault under the env-var name shown
-      below. The plaintext value never lands in <code>config.yaml</code>,
+      below. The plaintext value never lands in any config file,
       run logs, or any engagement file. The runner reads the
       <strong>env var first</strong>; the keychain is only consulted when
       the env var is unset.
@@ -1128,7 +1160,7 @@
               </div>
             </div>
             <div class="settings-inline-note">
-              Configuration lives in <code>~/hamm0r/config.yaml</code>.
+              Preferences are saved automatically.
             </div>
           </section>
 
@@ -1147,7 +1179,7 @@
               </div>
             </div>
             <div class="settings-inline-note">
-              Theme changes are saved to <code>~/hamm0r/config.yaml</code>.
+              Theme changes are saved automatically.
             </div>
           </section>
         </section>
@@ -1183,7 +1215,7 @@
               </label>
             </div>
             <div class="settings-inline-note" id="settings-logging-status">
-              Logging changes are saved to <code>~/hamm0r/config.yaml</code>.
+              Logging changes are saved automatically.
             </div>
           </section>
         </section>
@@ -1330,7 +1362,7 @@
     </div>
 
     <div class="settings-inline-note" id="settings-save-status">
-      Settings are saved to <code>~/hamm0r/config.yaml</code>.
+      Settings are saved automatically.
     </div>
     <div class="editor-actions settings-actions settings-footer-actions">
       <button id="btn-settings-save" class="btn btn-primary" type="button">Save</button>

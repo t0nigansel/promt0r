@@ -34,7 +34,3 @@ expect_used = "warn"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
-
-[toolchain]
-channel = "stable"
-components = ["rustfmt", "clippy", "rust-analyzer"]

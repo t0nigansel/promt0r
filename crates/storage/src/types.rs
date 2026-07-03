@@ -459,6 +459,12 @@ pub struct Scenario {
     /// is absent or `1`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_identity: Option<SessionIdentityConfig>,
+    /// Issue #23: delay in milliseconds inserted between successive HTTP
+    /// requests fired during a run, to pace requests against rate-limited
+    /// targets. `0` (the default) means fire as fast as possible. Absent in
+    /// older YAML loads as `0`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub delay_ms: u32,
 }
 
 /// Section 1.1 of `docs/ToDo.md`. How sessions in a multi-session run
@@ -505,6 +511,10 @@ fn default_repeat() -> u32 {
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 // Ã¢â€â‚¬Ã¢â€â‚¬ Engagement metadata Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
@@ -1034,6 +1044,7 @@ timeout_seconds: 30
             mutations: None,
             session_count: None,
             session_identity: None,
+            delay_ms: 250,
         };
         assert_eq!(file_roundtrip(&dir, "scenario.yaml", &scenario), scenario);
     }
@@ -1084,6 +1095,7 @@ timeout_seconds: 30
             mutations: None,
             session_count: None,
             session_identity: None,
+            delay_ms: 0,
         };
         assert_eq!(file_roundtrip(&dir, "scenario.yaml", &scenario), scenario);
     }
@@ -1315,6 +1327,7 @@ mode: single
                     header_name: "X-Conversation-Id".into(),
                 },
             }),
+            delay_ms: 0,
         };
         assert_eq!(file_roundtrip(&dir, "scn.yaml", &scenario), scenario);
     }

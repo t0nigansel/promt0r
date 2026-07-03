@@ -726,6 +726,7 @@ library:
   categories: [injection-classics]
 shared_session: true       # one HTTP client across the whole run
 repeat: 2
+delay_ms: 250              # pause between successive requests (issue #23)
 mutations:
   enabled_mutators: [encoding.base64, persona.dan]
   max_variants_per_seed: 4
@@ -778,6 +779,12 @@ session_identity:
     unique value (their short label) in `header_name`.
   - `custom_header` + `header_name` — same shape; semantically
     interchangeable, surfaced separately in the UI for clarity.
+- `delay_ms` (optional, issue #23) pauses that many milliseconds between
+  successive HTTP requests fired during the run, to pace requests against
+  rate-limited targets. The first request fires immediately; each
+  subsequent request waits `delay_ms`. Applies to both the matrix and
+  multi-session runners. Absent or `0` means no delay — older scenario
+  files load as `0`, so the change is backward compatible.
 
 Multi-session prompts opt into the plant or probe phase via the
 new `phase` field on `PromptEntry` (see `PromptsSpec.md`). Prompts

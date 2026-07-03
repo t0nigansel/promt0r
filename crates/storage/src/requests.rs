@@ -197,6 +197,7 @@ mod tests {
             mutations: None,
             session_count: None,
             session_identity: None,
+            delay_ms: 0,
         };
         crate::scenarios::save(&scenarios_dir, &scenario).unwrap();
 

@@ -245,9 +245,28 @@ function toast(message, type = 'info') {
   if (!container) return;
   const el = document.createElement('div');
   el.className = `toast toast-${type}`;
-  el.textContent = message;
-  container.appendChild(el);
-  setTimeout(() => el.remove(), 4000);
+
+  const text = document.createElement('span');
+  text.className = 'toast-message';
+  text.textContent = message;
+  el.appendChild(text);
+
+  // Errors carry the most information (raw backend failures), so they persist
+  // until dismissed and get a close control. Success/info auto-dismiss.
+  if (type === 'error') {
+    el.classList.add('toast-dismissible');
+    const close = document.createElement('button');
+    close.type = 'button';
+    close.className = 'toast-close';
+    close.setAttribute('aria-label', 'Dismiss');
+    close.textContent = '×';
+    close.addEventListener('click', () => el.remove());
+    el.appendChild(close);
+    container.appendChild(el);
+  } else {
+    container.appendChild(el);
+    setTimeout(() => el.remove(), 4000);
+  }
 }
 
 function toastAction(message, actionLabel, onAction, type = 'info') {
@@ -566,7 +585,54 @@ document.addEventListener('DOMContentLoaded', () => {
       r.hidden = !hasRun;
       r.textContent = breadcrumbState.runId || '';
     }
+    updateEngagementChip();
   }
+
+  // Persistent topbar indicator of engagement state — context, not a global
+  // action. Clicking it opens the dialog when none is active, or jumps to the
+  // open engagement. Driven from updateBreadcrumb so it tracks open/close/nav.
+  function updateEngagementChip() {
+    const chip = $('#topbar-eng-chip');
+    const label = $('#topbar-eng-chip-label');
+    if (!chip || !label) return;
+    if (dbOpen && breadcrumbState.engagementName) {
+      chip.dataset.state = 'open';
+      chip.title = 'Go to this engagement';
+      label.textContent = breadcrumbState.engagementName;
+    } else {
+      chip.dataset.state = 'none';
+      chip.title = 'Open or create an engagement';
+      label.textContent = 'No engagement open';
+    }
+  }
+
+  $('#topbar-eng-chip')?.addEventListener('click', () => {
+    if (dbOpen && breadcrumbState.engagementName) showView('view-engagements');
+    else openEngagementDialog();
+  });
+
+  // The persistent run indicator is a route back to the live run from anywhere.
+  $('#btn-tpd-goto')?.addEventListener('click', () => {
+    if (!topbarDetail.slug || !topbarDetail.runId) {
+      toast('No active run to open', 'info');
+      return;
+    }
+    showView('view-engagements');
+    openEngagementDetail(
+      { slug: topbarDetail.slug, name: topbarDetail.slug },
+      { selectRunId: topbarDetail.runId },
+    ).catch((err) => toast(err.message, 'error'));
+  });
+
+  // Breadcrumb segments navigate up: engagement → its detail, run → results.
+  $('#breadcrumb-engagement')?.addEventListener('click', () => {
+    if (breadcrumbState.engagementName) showView('view-engagements');
+  });
+  $('#breadcrumb-run')?.addEventListener('click', () => {
+    if (!breadcrumbState.runId) return;
+    showView('view-engagements');
+    setEngagementDetailTab('results');
+  });
 
   function onDbOpen(name, slug) {
     if (slug) activeEngagementSlug = slug;
@@ -619,9 +685,9 @@ document.addEventListener('DOMContentLoaded', () => {
       stopEngagementResultsPoll();
     }
     if (viewId !== 'view-engagements') clearEngagementRoute({ replace: true });
-    if (dbOpen) {
-      if (viewId === 'view-scenarios') loadScenarioList();
-    }
+    // Scenarios are global objects — build them with or without an engagement
+    // open. An engagement is only required to fire (enforced in start_scenario).
+    if (viewId === 'view-scenarios') loadScenarioList();
     updateGlobalFireButton();
   }
 
@@ -743,6 +809,18 @@ document.addEventListener('DOMContentLoaded', () => {
     toast(`Resumed: ${eng.name}`, 'success');
   }
 
+  // Re-fire the engagement's bound scenario as a fresh run inside the same
+  // engagement — the fast path for "run yesterday's scenario again".
+  async function rerunEngagement(eng) {
+    showView('view-engagements');
+    await openEngagementDetail(eng, { syncRoute: true });
+    if (!engagementDetail.activeScenarioId) {
+      toast('This engagement has no scenario bound — open it and pick one to run.', 'error');
+      return;
+    }
+    await fireSelectedEngagementScenario();
+  }
+
   async function loadHomeRecentEngagements() {
     const list = $('#home-recent-list');
     if (!list) return;
@@ -780,12 +858,18 @@ document.addEventListener('DOMContentLoaded', () => {
             <span class="landing-recent-meta">${esc(formatLandingDate(eng.created_at))} · ${runs.length} run${runs.length === 1 ? '' : 's'}</span>
           </div>
           <span class="landing-status ${status.css}">${esc(status.label)}</span>
+          <button class="btn btn-ghost btn-home-rerun" type="button" title="Fire this engagement's scenario again as a new run here">▶ Re-run</button>
           <button class="btn btn-ghost btn-home-resume" type="button">Resume</button>
         `;
         row.querySelector('.landing-recent-main').addEventListener('click', () => {
           quickResumeEngagement(eng).catch(err => toast(err.message, 'error'));
         });
-        row.querySelector('.btn-home-resume').addEventListener('click', () => {
+        row.querySelector('.btn-home-rerun').addEventListener('click', (e) => {
+          e.stopPropagation();
+          rerunEngagement(eng).catch(err => toast(err.message, 'error'));
+        });
+        row.querySelector('.btn-home-resume').addEventListener('click', (e) => {
+          e.stopPropagation();
           quickResumeEngagement(eng).catch(err => toast(err.message, 'error'));
         });
         list.appendChild(row);
@@ -804,7 +888,7 @@ document.addEventListener('DOMContentLoaded', () => {
     closeRunScenarioPicker();
     try {
       const eng = await API.call('create_engagement', {
-        name: `${scenario.name || scenario.id} · run`,
+        name: `${scenario.name || scenario.id} · ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
       });
       await API.call('open_db', { path: eng.slug });
       const result = await API.call('start_scenario', { scenario_id: scenario.id });
@@ -1158,6 +1242,14 @@ document.addEventListener('DOMContentLoaded', () => {
       ];
     }
 
+    // Quick Start is the guided golden path — keep it reachable in every
+    // state, not just on a cold first run (it creates its own engagement).
+    if (!tiles.some(t => t.action === 'quick_start')) {
+      tiles.push({ action: 'quick_start', primary: false, eyebrow: 'Shortcut',
+        title: 'Quick Start',
+        desc: 'Paste an endpoint URL, pick OWASP categories, fire. One screen.' });
+    }
+
     grid.innerHTML = tiles.map(t => `
       <button class="landing-card${t.primary ? ' landing-card-primary' : ''}" data-cta-action="${t.action}">
         <span class="landing-eyebrow">${t.eyebrow}</span>
@@ -1166,6 +1258,11 @@ document.addEventListener('DOMContentLoaded', () => {
       </button>
     `).join('');
   }
+
+  $('.flow-strip')?.addEventListener('click', (e) => {
+    const step = e.target.closest('.flow-step[data-view]');
+    if (step) showView(step.dataset.view);
+  });
 
   $('#home-cta-grid')?.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-cta-action]');
@@ -1296,9 +1393,14 @@ document.addEventListener('DOMContentLoaded', () => {
     resetTopbarDetail();
   }
 
+  // Pending auto-clear of the topbar indicator after a run reaches a
+  // terminal state. Reset on every progress event so a new run keeps its bar.
+  let topbarClearTimer = null;
+
   // ── Expand panel: opens on click of the compact bar, shows live run info.
   const topbarDetail = {
     runId: null,
+    slug: null,
     startedAtMs: null,
     elapsedTimer: null,
     seq: 0,
@@ -1344,6 +1446,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function resetTopbarDetail() {
     topbarDetail.runId = null;
+    topbarDetail.slug = null;
     topbarDetail.startedAtMs = null;
     topbarDetail.seq = 0;
     topbarDetail.total = 0;
@@ -1362,6 +1465,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // First sighting of this run? Capture start timestamp and start ticking.
     if (topbarDetail.runId !== ev.run_id) {
       topbarDetail.runId = ev.run_id;
+      topbarDetail.slug = ev.engagement_slug || activeEngagementSlug;
       topbarDetail.startedAtMs = Date.now();
       topbarDetail.errors = 0;
       if (topbarDetail.elapsedTimer) clearInterval(topbarDetail.elapsedTimer);
@@ -1542,6 +1646,13 @@ document.addEventListener('DOMContentLoaded', () => {
     $('#req-timeout').value = Number(req.timeout_seconds || 30);
     $('#req-test-prompt').value = req.test_payload || '';
     $('#btn-req-delete').style.display = req.id ? '' : 'none';
+    // Auto-expand the Advanced section when the request actually uses it.
+    const adv = $('#req-advanced');
+    if (adv) {
+      adv.open = !!(($('#req-tag')?.value || '').trim()
+        || ($('#req-bind')?.value || '').trim()
+        || ($('#req-result-columns')?.value || '').trim());
+    }
     clearRequestTestResult();
   }
 
@@ -1575,6 +1686,129 @@ document.addEventListener('DOMContentLoaded', () => {
     $('#req-test-response-extracted').value = '';
     $('#req-test-response-raw').value = '';
   }
+
+  // Turn a Request name into a stable kebab-case id (the on-disk filename
+  // stem). Mirrors how the Prompt editor auto-derives its id, so users never
+  // have to hand-author a filename.
+  function slugifyRequestId(name) {
+    return String(name || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60);
+  }
+
+  // ── curl import ────────────────────────────────────────────────────
+  // Pentesters arrive with a curl command from Burp/DevTools. Tokenize it
+  // (respecting quotes and line continuations) and fill the request form.
+  function tokenizeCurl(text) {
+    const src = String(text).replace(/\\\r?\n/g, ' ').trim();
+    const tokens = [];
+    let i = 0;
+    while (i < src.length) {
+      while (i < src.length && /\s/.test(src[i])) i++;
+      if (i >= src.length) break;
+      let tok = '';
+      while (i < src.length && !/\s/.test(src[i])) {
+        const ch = src[i];
+        if (ch === "'") {
+          i++;
+          while (i < src.length && src[i] !== "'") tok += src[i++];
+          i++;
+        } else if (ch === '"') {
+          i++;
+          while (i < src.length && src[i] !== '"') {
+            if (src[i] === '\\' && i + 1 < src.length) { tok += src[i + 1]; i += 2; }
+            else tok += src[i++];
+          }
+          i++;
+        } else {
+          tok += ch; i++;
+        }
+      }
+      tokens.push(tok);
+    }
+    return tokens;
+  }
+
+  function parseCurl(text) {
+    const tokens = tokenizeCurl(text);
+    const out = { method: null, url: null, headers: {}, body: null };
+    const dataFlags = new Set(['-d', '--data', '--data-raw', '--data-binary', '--data-ascii']);
+    for (let i = 0; i < tokens.length; i++) {
+      const t = tokens[i];
+      if (t === 'curl') continue;
+      if (t === '-X' || t === '--request') { out.method = (tokens[++i] || '').toUpperCase(); continue; }
+      if (t === '-H' || t === '--header') {
+        const h = tokens[++i] || '';
+        const idx = h.indexOf(':');
+        if (idx > 0) out.headers[h.slice(0, idx).trim()] = h.slice(idx + 1).trim();
+        continue;
+      }
+      if (dataFlags.has(t)) { out.body = tokens[++i] ?? ''; continue; }
+      if (t === '--url') { out.url = tokens[++i] || null; continue; }
+      if (t === '-u' || t === '--user') { i++; continue; }
+      if (t.startsWith('-')) continue;
+      if (!out.url && /^https?:\/\//i.test(t)) out.url = t;
+    }
+    if (!out.method) out.method = out.body ? 'POST' : 'GET';
+    return out;
+  }
+
+  function applyCurlToForm(parsed) {
+    if (parsed.url) $('#req-url').value = parsed.url;
+    if (parsed.method) $('#req-method').value = parsed.method;
+    // Keep secrets out of the persisted request file: drop Authorization and
+    // point the user at the Auth (env var) section instead.
+    const headers = { ...parsed.headers };
+    let hadAuth = false;
+    Object.keys(headers).forEach((k) => {
+      if (k.toLowerCase() === 'authorization') { delete headers[k]; hadAuth = true; }
+    });
+    renderRequestHeaders(headers);
+    if (parsed.body != null) {
+      let isJson = false;
+      try { JSON.parse(parsed.body); isJson = true; } catch (_) { isJson = false; }
+      if (isJson) {
+        setRequestBodyMode('structured');
+        $('#req-body-json').value = parsed.body;
+      } else {
+        setRequestBodyMode('raw');
+        $('#req-body-raw-text').value = parsed.body;
+      }
+    }
+    if (!$('#req-name').value.trim() && parsed.url) {
+      try { $('#req-name').value = new URL(parsed.url).host; } catch (_) { /* leave blank */ }
+    }
+    updatePromptDetector();
+    if (hadAuth) {
+      toast('Authorization header dropped — set the token under Auth (env var) so it is not stored in the request file.', 'info');
+    }
+  }
+
+  $('#btn-req-import-curl')?.addEventListener('click', () => {
+    const modal = $('#curl-import-modal');
+    if (!modal) return;
+    $('#curl-import-text').value = '';
+    modal.style.display = '';
+    setHidden(modal, false);
+    setTimeout(() => $('#curl-import-text').focus(), 0);
+  });
+  $('#curl-import-cancel')?.addEventListener('click', () => setHidden($('#curl-import-modal'), true));
+  $('#curl-import-close')?.addEventListener('click', () => setHidden($('#curl-import-modal'), true));
+  $('#curl-import-apply')?.addEventListener('click', () => {
+    const text = ($('#curl-import-text')?.value || '').trim();
+    if (!text) { toast('Paste a curl command first', 'info'); return; }
+    try {
+      const parsed = parseCurl(text);
+      if (!parsed.url) { toast('Could not find a URL in that curl command', 'error'); return; }
+      applyCurlToForm(parsed);
+      setHidden($('#curl-import-modal'), true);
+      toast('curl imported into the request form', 'success');
+    } catch (err) {
+      toast(`Could not parse curl: ${err.message}`, 'error');
+    }
+  });
 
   function buildRequestFromForm() {
     const headers = readRequestHeadersFromForm();
@@ -1620,10 +1854,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const tagRaw = ($('#req-tag')?.value || '').trim();
     const tag = tagRaw === '' ? null : tagRaw;
 
+    const nameVal = $('#req-name').value.trim();
+    const requestId = $('#req-id').value.trim()
+      || slugifyRequestId(nameVal) || 'request';
+
     const out = {
       version: 1,
-      id: $('#req-id').value.trim(),
-      name: $('#req-name').value.trim(),
+      id: requestId,
+      name: nameVal,
       method: $('#req-method').value.toUpperCase(),
       url: $('#req-url').value.trim(),
       auth,
@@ -2394,7 +2632,6 @@ document.addEventListener('DOMContentLoaded', () => {
     e.target.value = '';
   });
   $('#btn-seed-library').addEventListener('click', async () => {
-    if (!dbOpen) { toast('Open an engagement first', 'error'); return; }
     try {
       const result = await API.call('seed_library', { update: true });
       toast(`Seeded ${result.loaded} prompts`, 'success');
@@ -2407,7 +2644,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // ══════════════════════════════════════════════════════════════════
 
   async function loadScenarioList() {
-    if (!dbOpen) return;
     try {
       const scenarios = await API.call('list_scenarios', {});
       const ul = $('#scenario-list');
@@ -2463,7 +2699,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   async function createNewScenario() {
-    if (!dbOpen) { toast('Open an engagement first', 'error'); return; }
     try {
       const s = await API.call('create_scenario', { name: 'New Scenario' });
       currentScenarioId = s.id;
@@ -2490,6 +2725,7 @@ document.addEventListener('DOMContentLoaded', () => {
       // Fill header fields
       $('#sc-name').value = s.name;
       $('#sc-repeat').value = s.repeat_count || s.repeat || 1;
+      $('#sc-delay').value = s.delay_ms || 0;
 
       // Matrix-mode state. Read from the scenario YAML's matrix fields.
       currentScenarioMatrix = {
@@ -2551,6 +2787,16 @@ document.addEventListener('DOMContentLoaded', () => {
     $('#sc-matrix-shared-session').checked = !!currentScenarioMatrix.shared_session;
     renderScenarioMatrixMultiSession();
     updateMatrixPromptCounter();
+    syncScenarioDisclosures();
+  }
+
+  // Collapse the opt-in Mutations / Multi-session sections when unused so the
+  // common compose-and-go path stays legible; expand them when active.
+  function syncScenarioDisclosures() {
+    const mutAdv = document.getElementById('sc-mutations-adv');
+    if (mutAdv) mutAdv.open = (currentScenarioMatrix.enabled_mutators || []).length > 0;
+    const msAdv = document.getElementById('sc-multisession-adv');
+    if (msAdv) msAdv.open = Number(currentScenarioMatrix.session_count || 1) > 1;
   }
 
   function buildSessionIdentityPayload(kind, headerName) {
@@ -2918,6 +3164,7 @@ document.addEventListener('DOMContentLoaded', () => {
       id: currentScenarioId,
       name: $('#sc-name').value.trim() || 'Untitled',
       repeat_count: parseInt($('#sc-repeat').value) || 1,
+      delay_ms: Math.max(0, parseInt($('#sc-delay').value, 10) || 0),
       // Matrix fields fed straight to the Scenario YAML.
       request_ids: [...currentScenarioMatrix.request_ids],
       request_repeats: { ...currentScenarioMatrix.request_repeats },
@@ -3002,7 +3249,7 @@ document.addEventListener('DOMContentLoaded', () => {
     try {
       const result = await API.call('start_scenario', {
         scenario_id: currentScenarioId,
-        tester_name: $('#sc-tester').value.trim() || 'default',
+        tester_name: 'default',
       });
       currentRunId = result.id || result.run_id;
       toast(`Scenario run complete: ${result.status}`, result.status === 'completed' ? 'success' : 'info');
@@ -3282,7 +3529,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (verdict === 'UNCLEAR') {
       return '<span class="verdict-badge verdict-pending">unclear</span>';
     }
-    return '<span style="color:var(--text-3);">—</span>';
+    return '<span title="No verdict yet — verdicts require Analyz0r (activate it in Settings, then analyze the run)." style="color:var(--text-3);cursor:help;">—</span>';
   }
 
   function resultColumnsForResults(results) {
@@ -3314,8 +3561,9 @@ document.addEventListener('DOMContentLoaded', () => {
       .map((col) => `<th>${esc(col.label || col.id)}</th>`)
       .join('');
     $('#results-head-row').innerHTML = `
-      <th>Step</th><th>Session</th><th>Prompt ID</th><th>Status</th>
-      <th>Verdict</th><th>Triage</th>
+      <th>Step</th><th>Session</th><th>Prompt ID</th>
+      <th class="th-sortable" data-sort-key="status" title="Click to sort by status">Status</th>
+      <th class="th-sortable" data-sort-key="verdict" title="Click to sort by verdict (success first)">Verdict</th><th>Triage</th>
       ${metricHeaders}
       <th class="col-wide">Request</th>
       <th class="col-wide">Prompt</th><th class="col-wide">Response</th>
@@ -3335,14 +3583,39 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   let _triageActiveFilter = 'all';
+  let _verdictActiveFilter = 'all';
+  let _resultSort = null; // { key: 'verdict' | 'status', dir: 1 | -1 }
 
+  // Re-order the results rows in place per the active sort (if any). Called
+  // before filtering so it survives live-run refreshes and triage edits.
+  function sortResultRows() {
+    if (!_resultSort) return;
+    const tbody = document.getElementById('results-tbody');
+    if (!tbody) return;
+    const vOrder = { success: 0, partial: 1, unclear: 2, fail: 3, none: 4 };
+    const keyVal = (row) => {
+      if (_resultSort.key === 'verdict') return vOrder[row.dataset.verdict || 'none'] ?? 5;
+      if (_resultSort.key === 'status') return Number(row.dataset.statusCode || 0);
+      return Number(row.dataset.seq || 0);
+    };
+    [...tbody.querySelectorAll('tr[data-triage-status]')]
+      .sort((a, b) => (keyVal(a) - keyVal(b)) * _resultSort.dir
+        || (Number(a.dataset.seq || 0) - Number(b.dataset.seq || 0)))
+      .forEach((row) => tbody.appendChild(row));
+  }
+
+  // Apply both the triage-disposition and verdict filters (a row is visible
+  // only when it matches both). Named for its original triage-only role;
+  // still the single re-apply point called after every render/edit.
   function applyTriageFilter() {
-    const filter = _triageActiveFilter;
+    sortResultRows();
     const rows = document.querySelectorAll('#results-tbody tr[data-triage-status]');
     rows.forEach((row) => {
       const status = row.dataset.triageStatus || 'unreviewed';
-      const visible = filter === 'all' || status === filter;
-      row.style.display = visible ? '' : 'none';
+      const verdict = row.dataset.verdict || 'none';
+      const triageOk = _triageActiveFilter === 'all' || status === _triageActiveFilter;
+      const verdictOk = _verdictActiveFilter === 'all' || verdict === _verdictActiveFilter;
+      row.style.display = (triageOk && verdictOk) ? '' : 'none';
     });
   }
 
@@ -3354,6 +3627,61 @@ document.addEventListener('DOMContentLoaded', () => {
     document.querySelectorAll('.triage-filter-chip').forEach(c =>
       c.classList.toggle('active', c === chip)
     );
+    applyTriageFilter();
+  });
+
+  // Bulk-apply a triage status to every result currently shown (respecting
+  // the active filters). Existing per-row notes are preserved.
+  document.getElementById('btn-bulk-triage-apply')?.addEventListener('click', async () => {
+    const status = document.getElementById('bulk-triage-status')?.value || '';
+    if (!status) { toast('Pick a status to apply', 'info'); return; }
+    const slug = engagementDetail.slug;
+    const runId = engagementDetail.activeRunId;
+    if (!slug || !runId) { toast('Open a run first', 'error'); return; }
+    const rows = [...document.querySelectorAll('#results-tbody tr[data-triage-status]')]
+      .filter((row) => row.style.display !== 'none');
+    if (rows.length === 0) { toast('No results shown to update', 'info'); return; }
+    const ok = await confirmDialog({
+      title: 'Bulk triage',
+      message: `Set ${rows.length} shown result${rows.length === 1 ? '' : 's'} to "${TRIAGE_LABELS[status]}"?`,
+      confirmLabel: 'Apply',
+    });
+    if (!ok) return;
+    let done = 0;
+    for (const row of rows) {
+      const seq = Number(row.dataset.seq);
+      const note = row.querySelector('.triage-note-input')?.value || null;
+      try {
+        await API.call('set_triage_status', {
+          engagement_slug: slug, run_id: runId, seq, status, note,
+        });
+        done += 1;
+      } catch (_) { /* keep going; report the tally below */ }
+    }
+    toast(`Updated ${done}/${rows.length} result${rows.length === 1 ? '' : 's'}`,
+      done === rows.length ? 'success' : 'error');
+    await loadRunResults(runId, { engagementSlug: slug });
+  });
+
+  // Verdict filter — mirrors the triage bar; success-first triage of findings.
+  document.getElementById('verdict-filter-bar')?.addEventListener('click', (e) => {
+    const chip = e.target.closest('[data-verdict-filter]');
+    if (!chip) return;
+    _verdictActiveFilter = chip.dataset.verdictFilter;
+    document.querySelectorAll('.verdict-filter-chip').forEach(c =>
+      c.classList.toggle('active', c === chip)
+    );
+    applyTriageFilter();
+  });
+
+  // Click-to-sort on the Status / Verdict column headers. The head row is
+  // rebuilt on render but the element persists, so one delegated listener holds.
+  document.getElementById('results-head-row')?.addEventListener('click', (e) => {
+    const th = e.target.closest('th[data-sort-key]');
+    if (!th) return;
+    const key = th.dataset.sortKey;
+    if (_resultSort && _resultSort.key === key) _resultSort.dir *= -1;
+    else _resultSort = { key, dir: 1 };
     applyTriageFilter();
   });
 
@@ -3473,30 +3801,23 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  $('#btn-global-fire')?.addEventListener('click', async () => {
-    const btn = $('#btn-global-fire');
+  // Fire the object that belongs to the active view (request / scenario /
+  // engagement run). Bound to Cmd/Ctrl+Enter — the fastest repeatable action
+  // in the tool. Reuses resolveGlobalFireAction, which already picks per view.
+  async function fireActiveView() {
     const action = resolveGlobalFireAction();
     if (!action.enabled) {
       toast(action.title, 'info');
-      updateGlobalFireButton();
       return;
     }
-
-    btn.dataset.busy = 'true';
-    updateGlobalFireButton();
-    try {
-      if (action.mode === 'request') {
-        await fireSelectedRequest();
-      } else if (action.mode === 'scenario') {
-        await fireSelectedScenario();
-      } else if (action.mode === 'engagement') {
-        await fireSelectedEngagementScenario();
-      }
-    } finally {
-      btn.dataset.busy = 'false';
-      updateGlobalFireButton();
+    if (action.mode === 'request') {
+      await fireSelectedRequest();
+    } else if (action.mode === 'scenario') {
+      await fireSelectedScenario();
+    } else if (action.mode === 'engagement') {
+      await fireSelectedEngagementScenario();
     }
-  });
+  }
 
   function highlightActiveEngagementCard(slug) {
     $$('#engagement-cards .target-card-row').forEach((c) => {
@@ -3716,6 +4037,19 @@ document.addEventListener('DOMContentLoaded', () => {
       displayTotal || 0,
       ev.error ? 'error' : (ev.finished ? 'done' : 'running'),
     );
+    // Auto-clear the topbar indicator a few seconds after a run ends, so a
+    // finished run doesn't leave a stale bar lingering in the global chrome.
+    if (topbarClearTimer) { clearTimeout(topbarClearTimer); topbarClearTimer = null; }
+    if (ev.finished || ev.error) {
+      const finishedRunId = runId;
+      topbarClearTimer = setTimeout(() => {
+        topbarClearTimer = null;
+        // Only clear if no newer run has taken over the indicator.
+        if (topbarDetail.runId === finishedRunId || topbarDetail.runId === null) {
+          clearTopbarProgress();
+        }
+      }, 4000);
+    }
     updateTopbarDetailFromProgress({ ...ev, total: displayTotal || ev.total });
 
     setLiveActivityState(runId, {
@@ -4303,6 +4637,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const tr = document.createElement('tr');
         tr.className = 'clickable';
         tr.dataset.triageStatus = triageStatus;
+        tr.dataset.verdict = String(r.judge_verdict || '').toLowerCase() || 'none';
+        tr.dataset.seq = String(r.seq || 0);
+        tr.dataset.statusCode = String(r.error_message ? 9999 : (r.status_code || 0));
         const leakBadge = Array.isArray(r.leaks) && r.leaks.length > 0
           ? `<span class="leak-badge" title="Cross-session canary from ${esc(
               r.leaks.map(l => l.planted_session).join(', ')
@@ -4401,6 +4738,18 @@ document.addEventListener('DOMContentLoaded', () => {
         triageCell.appendChild(noteBtn);
         triageCell.appendChild(noteField);
 
+        const replayBtn = document.createElement('button');
+        replayBtn.type = 'button';
+        replayBtn.className = 'triage-note-btn row-replay-btn';
+        replayBtn.title = 'Replay this attempt (re-fire unchanged)';
+        replayBtn.setAttribute('aria-label', 'Replay attempt');
+        replayBtn.textContent = '↻';
+        replayBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          replayAttemptRow(r, replayBtn);
+        });
+        triageCell.appendChild(replayBtn);
+
         tr.addEventListener('click', () => showResultDetail(r));
         tbody.appendChild(tr);
       });
@@ -4485,8 +4834,8 @@ document.addEventListener('DOMContentLoaded', () => {
       ``,
       `## Results`,
       ``,
-      `| Step | Session | Prompt ID | Status | Triage | Note | Request | Prompt | Response | Latency |`,
-      `| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |`,
+      `| Step | Session | Prompt ID | Status | Verdict | Triage | Note | Request | Prompt | Response | Latency |`,
+      `| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |`,
     ];
 
     const triageBySeq = engagementDetail.triageByRunId.get(run?.id || '') || new Map();
@@ -4503,7 +4852,8 @@ document.addEventListener('DOMContentLoaded', () => {
         const triage = triageBySeq.get(Number(r.seq));
         const triageLabel = TRIAGE_LABELS[triage?.status] || TRIAGE_LABELS['unreviewed'];
         const triageNote = String(triage?.note || '').replace(/\|/g, '\\|');
-        lines.push(`| ${r.step_order || '-'} | ${r.session_label || '-'} | ${r.prompt_id || '-'} | ${statusText} | ${triageLabel} | ${triageNote || '-'} | ${requestText.replace(/\|/g, '\\|')} | ${promptText || '-'} | ${responseText || '-'} | ${r.latency_ms != null ? `${r.latency_ms}ms` : '-'} |`);
+        const verdictText = String(r.judge_verdict || '').toLowerCase() || '-';
+        lines.push(`| ${r.step_order || '-'} | ${r.session_label || '-'} | ${r.prompt_id || '-'} | ${statusText} | ${verdictText} | ${triageLabel} | ${triageNote || '-'} | ${requestText.replace(/\|/g, '\\|')} | ${promptText || '-'} | ${responseText || '-'} | ${r.latency_ms != null ? `${r.latency_ms}ms` : '-'} |`);
       });
 
     return lines.join('\n');
@@ -4533,6 +4883,7 @@ document.addEventListener('DOMContentLoaded', () => {
       </tr>
     `;
 
+    const triageBySeq = engagementDetail.triageByRunId.get(run?.id || '') || new Map();
     const resultRows = [...results]
       .sort((a, b) => Number(a.seq || 0) - Number(b.seq || 0))
       .map((r) => {
@@ -4540,12 +4891,19 @@ document.addEventListener('DOMContentLoaded', () => {
         const requestText = [String(r.request_method || '').toUpperCase(), String(r.request_url || '').trim()]
           .filter(Boolean)
           .join(' ') || '-';
+        const verdictText = String(r.judge_verdict || '').toLowerCase() || '-';
+        const triage = triageBySeq.get(Number(r.seq));
+        const triageLabel = TRIAGE_LABELS[triage?.status] || TRIAGE_LABELS['unreviewed'];
+        const triageNote = String(triage?.note || '');
         return `
           <tr>
             <td>${esc(String(r.step_order || '-'))}</td>
             <td>${esc(r.session_label || '-')}</td>
             <td>${esc(r.prompt_id || '-')}</td>
             <td>${esc(statusText)}</td>
+            <td>${esc(verdictText)}</td>
+            <td>${esc(triageLabel)}</td>
+            <td>${esc(triageNote || '-')}</td>
             <td>${esc(requestText)}</td>
             <td>${esc(r.prompt_text || '')}</td>
             <td>${esc(r.response_text || r.error_message || '')}</td>
@@ -4637,6 +4995,9 @@ document.addEventListener('DOMContentLoaded', () => {
         <th>Session</th>
         <th>Prompt ID</th>
         <th>Status</th>
+        <th>Verdict</th>
+        <th>Triage</th>
+        <th>Note</th>
         <th>Request</th>
         <th>Prompt</th>
         <th>Response</th>
@@ -5014,6 +5375,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (status) status.textContent = '—';
     const out = $('#replay-result');
     if (out) { out.hidden = true; out.innerHTML = ''; }
+    loadReplayHistory(replayContext.runId);
     setHidden($('#result-detail'), false);
   }
 
@@ -5097,6 +5459,85 @@ document.addEventListener('DOMContentLoaded', () => {
     if (status) status.textContent = `timed out waiting for ${replayRunId}`;
   }
 
+  // Replay history: prior replays for this attempt's run are persisted on disk
+  // (list_replays → replay run ids). Surface them so re-fires aren't throwaway.
+  async function loadReplayHistory(runId) {
+    const box = $('#replay-history');
+    if (!box) return;
+    box.innerHTML = '';
+    const slug = engagementDetail.slug || activeEngagementSlug;
+    if (!slug || !runId) return;
+    let ids = [];
+    try {
+      ids = await API.call('list_replays', { engagement_slug: slug, run_id: runId });
+    } catch (_) { return; }
+    if (!ids || ids.length === 0) return;
+    const title = document.createElement('div');
+    title.className = 'replay-history-title';
+    title.textContent = `Previous replays (${ids.length})`;
+    box.appendChild(title);
+    ids.forEach((id) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'replay-history-row';
+      btn.textContent = `Replay ${String(id).split('-replay-').pop()}`;
+      btn.title = id;
+      btn.addEventListener('click', () => viewReplay(id));
+      box.appendChild(btn);
+    });
+  }
+
+  // Load and render a specific past replay's response into the replay panel.
+  async function viewReplay(replayRunId) {
+    const slug = engagementDetail.slug || activeEngagementSlug;
+    const status = $('#replay-status');
+    const out = $('#replay-result');
+    if (status) status.textContent = `loading ${replayRunId}…`;
+    try {
+      const records = await API.call('read_run_attempts', {
+        engagement_slug: slug, run_id: replayRunId,
+      });
+      const attempt = (records || []).find((a) => a && a.seq);
+      if (!attempt) { if (status) status.textContent = 'no attempt recorded'; return; }
+      const body = await API.call('read_response_body', {
+        engagement_slug: slug, run_id: replayRunId, seq: attempt.seq,
+      }).catch(() => '');
+      if (status) status.textContent = `viewing ${replayRunId} · status ${attempt.response?.status ?? '—'}`;
+      if (out) {
+        out.hidden = false;
+        out.innerHTML = `
+          <div><strong>Status:</strong> ${esc(String(attempt.response?.status ?? '—'))}</div>
+          <div><strong>Latency:</strong> ${esc(String(attempt.timing?.duration_ms ?? '—'))} ms</div>
+          <pre>${esc(body || '(no response body)')}</pre>`;
+      }
+    } catch (err) {
+      if (status) status.textContent = `error: ${err.message}`;
+    }
+  }
+
+  // One-click re-fire of a single attempt straight from its results row.
+  async function replayAttemptRow(r, btn) {
+    const slug = engagementDetail.slug || activeEngagementSlug;
+    if (!slug || !r.run_id || r.seq == null) {
+      toast('Cannot replay this attempt', 'error');
+      return;
+    }
+    if (btn) btn.disabled = true;
+    try {
+      const replayRunId = await API.call('replay_attempt', {
+        engagement_slug: slug,
+        run_id: r.run_id,
+        seq: Number(r.seq),
+        prompt_override: null,
+      });
+      toast(`Replay fired · ${replayRunId}`, 'success');
+    } catch (err) {
+      toast(`Replay failed: ${err.message}`, 'error');
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
   $('#detail-source-tabs').addEventListener('click', (e) => {
     const tab = e.target.closest('.tab[data-detail-source]');
     if (!tab) return;
@@ -5158,6 +5599,20 @@ document.addEventListener('DOMContentLoaded', () => {
   // The Workbench-specific bindings ('/' focus picker, Cmd/Ctrl+Enter to
   // fire) were retired with the Workbench view in Phase 2F of
   // docs/RefactorPlan.md.
+  // Views reachable by Cmd/Ctrl+1..5 (matches the sidebar noun order).
+  const VIEW_SHORTCUTS = {
+    '1': 'view-home',
+    '2': 'view-engagements',
+    '3': 'view-requests',
+    '4': 'view-scenarios',
+    '5': 'view-prompts',
+  };
+
+  function anyModalOpen() {
+    return [...document.querySelectorAll('.modal, .dialog')]
+      .some((m) => m.offsetParent !== null);
+  }
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       document.querySelectorAll('.modal').forEach(m => { m.style.display = 'none'; });
@@ -5165,6 +5620,23 @@ document.addEventListener('DOMContentLoaded', () => {
       if (pickerSearch && document.activeElement === pickerSearch) {
         pickerSearch.blur();
       }
+      return;
+    }
+
+    // Cmd/Ctrl+Enter fires the active view's object — from anywhere except an
+    // open modal form (whose own submit is the intended action).
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      if (anyModalOpen()) return;
+      e.preventDefault();
+      fireActiveView().catch((err) => toast(err.message, 'error'));
+      return;
+    }
+
+    // Cmd/Ctrl+1..5 switch views (accelerator only — no config surface).
+    if ((e.metaKey || e.ctrlKey) && VIEW_SHORTCUTS[e.key]) {
+      if (anyModalOpen()) return;
+      e.preventDefault();
+      showView(VIEW_SHORTCUTS[e.key]);
     }
   });
 
@@ -5440,7 +5912,7 @@ function initAnalyzerUI() {
     $('#settings-logging-status').innerHTML =
       'Logging changes apply after restarting the app.';
     $('#settings-save-status').innerHTML =
-      'Settings are saved to <code>~/hamm0r/config.yaml</code>.';
+      'Settings are saved automatically.';
   }
 
   async function refreshAnalyzerModal() {
@@ -5806,7 +6278,7 @@ function initAnalyzerUI() {
       $('#settings-logging-status').innerHTML =
         'Logging changes apply after restarting the app.';
       $('#settings-save-status').innerHTML =
-        'Saved to <code>~/hamm0r/config.yaml</code>. Judge changes apply to future Analyze and Judge actions immediately.';
+        'Saved. Judge changes apply to future Analyze and Judge actions immediately.';
       window.dispatchEvent(new CustomEvent('analyzer-state-changed'));
       toast('Settings saved. Restart the app only if you changed logging.', 'success');
     } catch (err) {

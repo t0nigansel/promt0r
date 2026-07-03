@@ -92,6 +92,7 @@ mod tests {
             mutations: None,
             session_count: None,
             session_identity: None,
+            delay_ms: 0,
         }
     }
 
