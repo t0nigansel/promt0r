@@ -33,6 +33,7 @@ pub fn create_scenario(paths: State<'_, AppPaths>, name: String) -> Result<Scena
         mutations: None,
         session_count: None,
         session_identity: None,
+        delay_ms: 0,
     };
     scenarios::save(&paths.0.scenarios_dir(), &scenario)?;
     Ok(scenario)

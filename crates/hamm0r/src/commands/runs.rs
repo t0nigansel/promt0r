@@ -425,6 +425,7 @@ async fn dispatch_matrix_scenario(
             body_logging_enabled: config_state.0.logging.body_logging_enabled,
             on_attempt_log: None,
             cancellation: Some(cancellation.clone()),
+            delay_ms: scenario.delay_ms,
         };
 
         let run_id_ret = run_id.clone();
@@ -489,6 +490,7 @@ async fn dispatch_matrix_scenario(
         runner_version: env!("CARGO_PKG_VERSION").to_owned(),
         body_logging_enabled: config_state.0.logging.body_logging_enabled,
         cancellation: Some(cancellation.clone()),
+        delay_ms: scenario.delay_ms,
         on_attempt_log: Some(Arc::new({
             let logger = logger.0.clone();
             let app = app.clone();
